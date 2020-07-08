@@ -22,15 +22,16 @@ def parse_numpy(string):
     result = numpy.fromstring(string, sep=' ')
     return result
 
-# set font
-fontP = font_manager.FontProperties()
-fontP.set_family('SimHei')
-fontP.set_size(14)
+# # set font
+# fontP = font_manager.FontProperties()
+# fontP.set_family('SimHei')
+# fontP.set_size(14)
 
 # parse from text
-result = _open(sys.argv[1], 'r').read()
+local_result_path = "/Users/sliu/Desktop/Code/Python/THUMT/results/lrp_newstest2015"
+result = _open(os.path.join(local_result_path, sys.argv[1]), 'r').read()
 src = re.findall('src: (.*?)\n', result)[0]
-src = src.decode('utf-8')
+# src = src.decode('utf-8')
 trg = re.findall('trg: (.*?)\n', result)[0]
 rlv = re.findall('result: ([\s\S]*)', result)[0]
 rlv = parse_numpy(rlv)
@@ -48,12 +49,17 @@ rlv = numpy.reshape(rlv, [len_t, len_s])
 maximum = numpy.max(numpy.abs(rlv))
 plt.matshow(rlv, cmap="RdBu_r", vmin=-maximum, vmax=maximum)
 
-fontname = "Times"
+# fontname = "Times"
 plt.colorbar()
-plt.xticks(range(len_s), src_words, fontsize=14, family=fontname,
+plt.xticks(range(len_s), src_words, fontsize=14,
            rotation='vertical')
-plt.yticks(range(len_t), trg_words, fontsize=14, family=fontname)
+plt.yticks(range(len_t), trg_words, fontsize=14)
 
 matplotlib.rcParams['font.family'] = "Times"
-plt.show()
+# plt.show()
+
+figure_path = "/Users/sliu/Desktop/Code/Python/THUMT/results/visualization"
+basename = os.path.basename(sys.argv[1]).split('.')[0]
+figure_file = os.path.join(figure_path, basename + '.pdf')
+plt.savefig(figure_file)
 

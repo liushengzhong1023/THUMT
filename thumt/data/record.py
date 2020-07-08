@@ -15,6 +15,9 @@ from tensorflow.contrib.slim import parallel_reader, tfexample_decoder
 
 
 def input_pipeline(file_pattern, mode, capacity=64):
+    '''
+    Decode tf-record files and return the parsed examples.
+    '''
     keys_to_features = {
         "source": tf.VarLenFeature(tf.int64),
         "target": tf.VarLenFeature(tf.int64),
@@ -60,19 +63,23 @@ def input_pipeline(file_pattern, mode, capacity=64):
 def batch_examples(examples, batch_size, max_length, mantissa_bits,
                    shard_multiplier=1, length_multiplier=1, scheme="token",
                    drop_long_sequences=True):
+    '''
+    The examples passed in are all examples contained in one dataset.
+    outputs: outputs is a list or dictionary of batched, bucketed, outputs corresponding to elements of tensors.
+    '''
     with tf.name_scope("batch_examples"):
         max_length = max_length or batch_size
         min_length = 8
         mantissa_bits = mantissa_bits
 
-        # compute boundaries
+        # compute boundaries for buckets
         x = min_length
         boundaries = []
-
         while x < max_length:
             boundaries.append(x)
             x += 2 ** max(0, int(math.log(x, 2)) - mantissa_bits)
 
+        # decide batch sizes and bucket capacities for each length bucket
         if scheme is "token":
             batch_sizes = [max(1, batch_size // length)
                            for length in boundaries + [max_length]]
@@ -87,11 +94,16 @@ def batch_examples(examples, batch_size, max_length, mantissa_bits,
         max_length = max_length if drop_long_sequences else 10 ** 9
 
         # The queue to bucket on will be chosen based on maximum length.
+        # Examples of different lengths go to different buckets; padded to the pre-defined lengths (i.e., boundaries)
+        # Then divide into batches for each bucket
         max_example_length = 0
         for v in examples.values():
+            # update max_example_length
             seq_length = tf.shape(v)[0]
             max_example_length = tf.maximum(max_example_length, seq_length)
 
+        # bucket the input according to their length
+        # A tuple (sequence_length, outputs) where sequence_length is a 1-D Tensor of size batch_size.
         (_, outputs) = tf.contrib.training.bucket_by_sequence_length(
             max_example_length,
             examples,
@@ -107,6 +119,9 @@ def batch_examples(examples, batch_size, max_length, mantissa_bits,
 
 
 def get_input_features(file_patterns, mode, params):
+    '''
+    num_datashards: number of devices that will perform training.
+    '''
     with tf.name_scope("input_queues"):
         with tf.device("/cpu:0"):
             if mode != "train":
@@ -118,9 +133,12 @@ def get_input_features(file_patterns, mode, params):
 
             batch_size_multiplier = 1
             capacity = 64 * num_datashards
+
+            # set up the input pipeline, iterator, and get the examples
             examples = input_pipeline(file_patterns, mode, capacity)
             drop_long_sequences = (mode == "train")
 
+            # batch the examples to get the batched input; returned is the batched and bucketed input features
             feature_map = batch_examples(
                 examples,
                 batch_size,
@@ -132,6 +150,7 @@ def get_input_features(file_patterns, mode, params):
                 drop_long_sequences
             )
 
+        # save in the dictionary
         features = {
             "source": feature_map["source"],
             "target": feature_map["target"],

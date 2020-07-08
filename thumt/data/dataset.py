@@ -135,7 +135,9 @@ def get_training_input(filenames, params):
         iterator = dataset.make_one_shot_iterator()
         features = iterator.get_next()
 
-        # Create lookup table
+        # Create lookup table, unk=unknown, which is used as the default index value for all unrecognized words.
+        # The lookup table is the mapping word --> index
+        # params.mapping stores the word-->index mapping for all control words
         src_table = tf.contrib.lookup.index_table_from_tensor(
             tf.constant(params.vocabulary["source"]),
             default_value=params.mapping["source"][params.unk]
@@ -145,11 +147,11 @@ def get_training_input(filenames, params):
             default_value=params.mapping["target"][params.unk]
         )
 
-        # String to index lookup
+        # String to index lookup; convert the source/target features into their index list.
         features["source"] = src_table.lookup(features["source"])
         features["target"] = tgt_table.lookup(features["target"])
 
-        # Batching
+        # Batching, batch the data samples
         features = batch_examples(features, params.batch_size,
                                   params.max_length, params.mantissa_bits,
                                   shard_multiplier=len(params.device_list),
@@ -157,7 +159,7 @@ def get_training_input(filenames, params):
                                   constant=params.constant_batch_size,
                                   num_threads=params.num_threads)
 
-        # Convert to int32
+        # Convert to int32; convert all feature fields to int type
         features["source"] = tf.to_int32(features["source"])
         features["target"] = tf.to_int32(features["target"])
         features["source_length"] = tf.to_int32(features["source_length"])
@@ -223,6 +225,7 @@ def get_evaluation_input(inputs, params):
 
         for data in inputs:
             dataset = tf.data.Dataset.from_tensor_slices(data)
+
             # Split string
             dataset = dataset.map(lambda x: tf.string_split([x]).values,
                                   num_parallel_calls=params.num_threads)

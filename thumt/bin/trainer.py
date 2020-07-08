@@ -34,7 +34,7 @@ def parse_args(args=None):
                         help="Path of source and target corpus")
     parser.add_argument("--record", type=str,
                         help="Path to tf.Record data")
-    parser.add_argument("--output", type=str, default="train",
+    parser.add_argument("--output", type=str, default="/home/shengzhong/THUMT/saved_model/train",
                         help="Path to saved models")
     parser.add_argument("--vocabulary", type=str, nargs=2,
                         help="Path of source and target vocabulary")
@@ -114,6 +114,12 @@ def default_parameters():
 
 
 def import_params(model_dir, model_name, params):
+    '''
+    Two param file:
+    1) params.json
+    2) model_name.json
+    Parse the HParams from the json file.
+    '''
     model_dir = os.path.abspath(model_dir)
     p_name = os.path.join(model_dir, "params.json")
     m_name = os.path.join(model_dir, model_name + ".json")
@@ -135,6 +141,9 @@ def import_params(model_dir, model_name, params):
 
 
 def export_params(output_dir, name, params):
+    '''
+    Save the params to json output file.
+    '''
     if not tf.gfile.Exists(output_dir):
         tf.gfile.MkDir(output_dir)
 
@@ -154,6 +163,11 @@ def collect_params(all_params, params):
 
 
 def merge_parameters(params1, params2):
+    '''
+    params1 is the general default parameters.
+    params2 is the default HParams of the chosen model.
+    params2 overrides params1
+    '''
     params = tf.contrib.training.HParams()
 
     for (k, v) in six.iteritems(params1.values()):
@@ -172,6 +186,11 @@ def merge_parameters(params1, params2):
 
 
 def override_parameters(params, args):
+    '''
+    Use the argparser args to overide tf.contrib.training.HParams.
+    params: tf.contrib.training.HParams
+    args: ArgParser
+    '''
     params.model = args.model
     params.input = args.input or params.input
     params.output = args.output or params.output
@@ -181,10 +200,13 @@ def override_parameters(params, args):
     params.references = args.references or params.references
     params.parse(args.parameters)
 
+    # vocabulary stores the list of all words; not the mapping
     params.vocabulary = {
         "source": vocabulary.load_vocabulary(params.vocab[0]),
         "target": vocabulary.load_vocabulary(params.vocab[1])
     }
+
+    # add <eos> to each vocabulary
     params.vocabulary["source"] = vocabulary.process_vocabulary(
         params.vocabulary["source"], params
     )
@@ -194,6 +216,7 @@ def override_parameters(params, args):
 
     control_symbols = [params.pad, params.bos, params.eos, params.unk]
 
+    # get index of all control symbols; stored in params.mapping
     params.mapping = {
         "source": vocabulary.get_control_mapping(
             params.vocabulary["source"],
@@ -333,17 +356,24 @@ def main(args):
         distribute.enable_distributed_training()
 
     tf.logging.set_verbosity(tf.logging.INFO)
+
+    # retrieve correct model class
     model_cls = models.get_model(args.model)
+
+    # default params
     params = default_parameters()
 
     # Import and override parameters
     # Priorities (low -> high):
-    # default -> saved -> command
-    params = merge_parameters(params, model_cls.get_parameters())
-    params = import_params(args.output, args.model, params)
-    override_parameters(params, args)
+    # default -> model_default -> saved (in file) -> command
+    # params is an instance of tf.contrib.training.HParams
+    params = merge_parameters(params, model_cls.get_parameters())  # default
+    params = import_params(args.output, args.model, params)  # saved
+    override_parameters(params, args)  # command
 
     # Export all parameters and model specific parameters
+    # params.json saves the current merged parameters;
+    # model_name.json saves the default parameters of the chosen model.
     if distribute.rank() == 0:
         export_params(params.output, "params.json", params)
         export_params(
@@ -354,10 +384,12 @@ def main(args):
 
     # Build Graph
     with tf.Graph().as_default():
+        # Build the input pipeline, use tf-record or text-data
         if not params.record:
-            # Build input queue
+            # Use text data
             features = dataset.get_training_input(params.input, params)
         else:
+            # Use tf-record data
             features = record.get_input_features(
                 os.path.join(params.record, "*train*"), "train", params
             )
@@ -367,6 +399,7 @@ def main(args):
         regularizer = tf.contrib.layers.l1_l2_regularizer(
             scale_l1=params.scale_l1, scale_l2=params.scale_l2)
         model = model_cls(params)
+
         # Create global step
         global_step = tf.train.get_or_create_global_step()
         dtype = tf.float16 if args.half else None
@@ -409,7 +442,7 @@ def main(args):
         if args.half:
             opt = optimizers.LossScalingOptimizer(opt, params.loss_scale)
 
-        # Optimization
+        # Optimization, compute gradients --> clip and normalize gradients --> apply gradients
         grads_and_vars = opt.compute_gradients(
             loss, colocate_gradients_with_ops=True)
 
@@ -418,10 +451,13 @@ def main(args):
             grads, _ = tf.clip_by_global_norm(grads, params.clip_grad_norm)
             grads_and_vars = zip(grads, var_list)
 
+        # define train operation
         train_op = opt.apply_gradients(grads_and_vars,
                                        global_step=global_step)
 
-        # Validation
+        # Validation, get validation input
+        # params.validation is the source of the validation data
+        # params.references is the target of the validation data
         if params.validation and params.references[0]:
             files = [params.validation] + list(params.references)
             eval_inputs = dataset.sort_and_zip_files(files)
@@ -429,7 +465,10 @@ def main(args):
         else:
             eval_input_fn = None
 
-        # Hooks
+        # Hooks, train_hooks is a list of hooks;
+        # the first hook defines the total number of steps during training
+        # the second hook specifies that the training will stop if loss is NaN
+        # the third hook gives the logging specifications
         train_hooks = [
             tf.train.StopAtStepHook(last_step=params.train_steps),
             tf.train.NanTensorHook(loss),
@@ -458,6 +497,8 @@ def main(args):
                 sharded=False
             )
             tf.add_to_collection(tf.GraphKeys.SAVERS, saver)
+
+            # Specify how often to save the model, defined by params.update_cycle (steps)
             train_hooks.append(
                 hooks.MultiStepHook(
                     tf.train.CheckpointSaverHook(
@@ -468,6 +509,7 @@ def main(args):
                     step=params.update_cycle)
             )
 
+            # Add the EvaluationHood to perform evaluation per params.eval_secs or params.eval_steps
             if eval_input_fn is not None:
                 train_hooks.append(
                     hooks.MultiStepHook(

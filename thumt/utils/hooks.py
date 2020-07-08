@@ -68,6 +68,9 @@ def _save_checkpoint_def(filename, checkpoint_names):
 
 
 def _read_score_record(filename):
+    '''
+    Return a list of scores corresponding to all saved models.
+    '''
     # "checkpoint_name": score
     records = []
 
@@ -85,6 +88,9 @@ def _read_score_record(filename):
 
 
 def _save_score_record(filename, records):
+    '''
+    Save the scores for all currently saved models.
+    '''
     keys = []
 
     for record in records:
@@ -259,6 +265,10 @@ class EvaluationHook(tf.train.SessionRunHook):
         )
 
     def begin(self):
+        '''
+        Called once before using the session.
+        Only the models achieving the highest BLEU score on the validation data are saved in self._save_path
+        '''
         if self._timer.last_triggered_step() is None:
             self._timer.update_last_triggered_step(0)
 
@@ -281,10 +291,17 @@ class EvaluationHook(tf.train.SessionRunHook):
         self._global_step = global_step
 
     def before_run(self, run_context):
+        '''
+        Called before each call to run().
+        '''
         args = tf.train.SessionRunArgs(self._global_step)
         return args
 
     def after_run(self, run_context, run_values):
+        '''
+        Called afer each call to run()
+        After running some steps, captured by the evaluation hook.
+        '''
         stale_global_step = run_values.results
 
         if self._timer.should_trigger_for_step(stale_global_step + 1):
@@ -301,6 +318,7 @@ class EvaluationHook(tf.train.SessionRunHook):
                 saver.save(run_context.session,
                            save_path,
                            global_step=global_step)
+
                 # Do validation here
                 tf.logging.info("Validating model at step %d" % global_step)
                 score = _evaluate(self._eval_fn, self._eval_input_fn,
@@ -313,15 +331,19 @@ class EvaluationHook(tf.train.SessionRunHook):
 
                 _save_log(self._log_name, (self._metric, global_step, score))
 
+                # Save the models with the highest BLEU scores; delete the old ones if new highest score appears
                 checkpoint_filename = os.path.join(self._base_dir,
                                                    "checkpoint")
                 all_checkpoints = _read_checkpoint_def(checkpoint_filename)
                 records = _read_score_record(self._record_name)
                 latest_checkpoint = all_checkpoints[-1]
+
+                # record is the list of [checkpoint, its score], records are a list of scores
                 record = [latest_checkpoint, score]
                 added, removed, records = _add_to_record(records, record,
                                                          self._max_to_keep)
 
+                # Save the new models
                 if added is not None:
                     old_path = os.path.join(self._base_dir, added)
                     new_path = os.path.join(self._save_path, added)
@@ -332,6 +354,7 @@ class EvaluationHook(tf.train.SessionRunHook):
                         n_file = o_file.replace(old_path, new_path)
                         tf.gfile.Copy(o_file, n_file, overwrite=True)
 
+                # Delete the old models
                 if removed is not None:
                     filename = os.path.join(self._save_path, removed)
                     tf.logging.info("Removing %s" % filename)
@@ -340,6 +363,7 @@ class EvaluationHook(tf.train.SessionRunHook):
                     for name in files:
                         tf.gfile.Remove(name)
 
+                # Save the score for current saved models
                 _save_score_record(self._record_name, records)
                 checkpoint_filename = checkpoint_filename.replace(
                     self._base_dir, self._save_path
@@ -347,6 +371,7 @@ class EvaluationHook(tf.train.SessionRunHook):
                 _save_checkpoint_def(checkpoint_filename,
                                      [item[0] for item in records])
 
+                # Log the current best score
                 best_score = records[0][1]
                 tf.logging.info("Best score at step %d: %f" %
                                 (global_step, best_score))
@@ -356,6 +381,8 @@ class EvaluationHook(tf.train.SessionRunHook):
 
         if last_step != self._timer.last_triggered_step():
             global_step = last_step
+
+            # Perform evaluation
             tf.logging.info("Validating model at step %d" % global_step)
             score = _evaluate(self._eval_fn, self._eval_input_fn,
                               self._eval_decode_fn,
@@ -365,6 +392,7 @@ class EvaluationHook(tf.train.SessionRunHook):
             tf.logging.info("%s at step %d: %f" %
                             (self._metric, global_step, score))
 
+            # Check whether to save and delete models
             checkpoint_filename = os.path.join(self._base_dir,
                                                "checkpoint")
             all_checkpoints = _read_checkpoint_def(checkpoint_filename)
@@ -374,6 +402,7 @@ class EvaluationHook(tf.train.SessionRunHook):
             added, removed, records = _add_to_record(records, record,
                                                      self._max_to_keep)
 
+            # Save the new model
             if added is not None:
                 old_path = os.path.join(self._base_dir, added)
                 new_path = os.path.join(self._save_path, added)
@@ -384,6 +413,7 @@ class EvaluationHook(tf.train.SessionRunHook):
                     n_file = o_file.replace(old_path, new_path)
                     tf.gfile.Copy(o_file, n_file, overwrite=True)
 
+            # Delete the old model with lower scores
             if removed is not None:
                 filename = os.path.join(self._save_path, removed)
                 tf.logging.info("Removing %s" % filename)
@@ -392,6 +422,7 @@ class EvaluationHook(tf.train.SessionRunHook):
                 for name in files:
                     tf.gfile.Remove(name)
 
+            # Save the current scores for saved models and log current best score
             _save_score_record(self._record_name, records)
             checkpoint_filename = checkpoint_filename.replace(
                 self._base_dir, self._save_path

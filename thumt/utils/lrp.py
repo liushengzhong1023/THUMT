@@ -20,7 +20,8 @@ from tensorflow.python.layers import base as base_layer
 # Default value for INF
 INF = 1. * 1e7
 
-def reduce_reserve(matrix,axis):
+
+def reduce_reserve(matrix, axis):
     return tf.expand_dims(tf.reduce_sum(matrix, axis), axis)
 
 
@@ -102,7 +103,7 @@ def weight_ratio_linear_v2n_2d(inputs, weights, output, w_x_inp, bias=None,
     output_ex = tf.expand_dims(output, 1)
     w_x_inp_ex = [tf.expand_dims(w, 2) for w in w_x_inp]
     result = weight_ratio_linear_v2n(inputs_ex, weights, output_ex,
-                                    w_x_inp_ex, bias=bias, stab=stab)
+                                     w_x_inp_ex, bias=bias, stab=stab)
     result = [tf.squeeze(res, 2) for res in result]
     return result
 
@@ -122,12 +123,12 @@ def weight_ratio_linear_v2n(inputs, weights, output, w_x_inp, bias=None,
     bs = tf.shape(w_x_inp[0])[0]
     lq = tf.shape(w_x_inp[0])[2]
     outp = tf.expand_dims(stabilize(output, stab), 1)
-    outp = tf.reshape(outp, [bs,1,lq,-1])
+    outp = tf.reshape(outp, [bs, 1, lq, -1])
 
     for i in range(len(inputs)):
         di = tf.shape(w_x_inp[i])[3]
         ls = tf.shape(w_x_inp[i])[1]
-        inp = tf.reshape(inputs[i], [bs,1,lq,-1])
+        inp = tf.reshape(inputs[i], [bs, 1, lq, -1])
         w = w_x_inp[i] * inp
         w = tf.reshape(w, [-1, di])
         w = tf.matmul(w, weights[i])
@@ -154,7 +155,7 @@ def linear_v2n(inputs, output_size, bias, w_x_inp, params, concat=False,
     """
 
     with tf.variable_scope(scope, default_name="linear", values=[inputs]):
-        #assert not concat
+        # assert not concat
         if not isinstance(inputs, (list, tuple)):
             inputs = [inputs]
 
@@ -178,7 +179,7 @@ def linear_v2n(inputs, output_size, bias, w_x_inp, params, concat=False,
             input_size = sum(input_size)
             inputs = tf.concat(inputs, 1)
             shape = [input_size, output_size]
-            weight_shape = tf.concat([batch_shape,shape], -1)
+            weight_shape = tf.concat([batch_shape, shape], -1)
             matrix = tf.get_variable("matrix", shape, dtype=dtype)
             results.append(tf.matmul(inputs, matrix))
         else:
@@ -210,7 +211,7 @@ def linear_v2n(inputs, output_size, bias, w_x_inp, params, concat=False,
 
         output = tf.reshape(output, output_shape)
 
-        return {"output":output, "weight_ratios": weight_ratios}
+        return {"output": output, "weight_ratios": weight_ratios}
 
 
 def maxout_v2n(inputs, output_size, maxpart, w, params, use_bias=True,
@@ -246,7 +247,7 @@ def maxout_v2n(inputs, output_size, maxpart, w, params, use_bias=True,
     # direct
     w_readout_maxout = output_maxout["weight_ratio"]
 
-    #propagate
+    # propagate
     propagater = tf.matmul
 
     w_x_maxout = propagater(w_x_readout, w_readout_maxout)
@@ -254,6 +255,7 @@ def maxout_v2n(inputs, output_size, maxpart, w, params, use_bias=True,
     weight_ratios = [w_x_maxout]
 
     return {"output": output, "weight_ratios": weight_ratios}
+
 
 class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
     """ Groundhog's implementation of GRUCell
@@ -276,7 +278,7 @@ class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
 
             bs = tf.shape(w_x_h_last)[0]
             emb = tf.shape(inputs)[-1]
-            w_x_x = tf.ones([bs,1,emb], dtype=tf.float32)
+            w_x_x = tf.ones([bs, 1, emb], dtype=tf.float32)
             all_inputs = list(inputs) + [state]
             r_linear = linear_v2n(all_inputs, self._num_units, False,
                                   [w_x_x, w_x_h_last], params, False,
@@ -300,8 +302,8 @@ class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
                                   scope="candidate", d2=True)
             w_x_c_direct, w_tx_reseted_c = c_linear["weight_ratios"]
             w_x_reseted_c, w_xlast_c = tf.split(w_tx_reseted_c,
-                                        [1, tf.shape(w_tx_reseted_c)[1]-1],
-                                        axis=1)
+                                                [1, tf.shape(w_tx_reseted_c)[1] - 1],
+                                                axis=1)
             w_x_c = w_x_c_direct + w_x_reseted_c
             c = c_linear["output"]
 
@@ -309,10 +311,10 @@ class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
             h2 = (1.0 - u) * state
             new_state = h1 + h2
             new_state_stab = stabilize(new_state, params.stab)
-            w_x_newh = w_x_c * tf.expand_dims(h1/new_state_stab, axis=1)
+            w_x_newh = w_x_c * tf.expand_dims(h1 / new_state_stab, axis=1)
             w_xlast_newh = \
-                      w_xlast_c * tf.expand_dims(h1/new_state_stab, axis=1) + \
-                      w_x_h_last * tf.expand_dims(h2/new_state_stab, axis=1)
+                w_xlast_c * tf.expand_dims(h1 / new_state_stab, axis=1) + \
+                w_x_h_last * tf.expand_dims(h2 / new_state_stab, axis=1)
 
         return new_state, new_state, w_xlast_newh, w_x_newh
 
@@ -323,6 +325,7 @@ class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
     @property
     def output_size(self):
         return self._num_units
+
 
 class LegacyGRUCell_decoder_v2n(tf.nn.rnn_cell.RNNCell):
     """ Groundhog's implementation of GRUCell
@@ -422,6 +425,7 @@ def split_heads(inputs, num_heads, name=None):
         ret.set_shape(new_shape)
         return tf.transpose(ret, [0, 3, 1, 2, 4])
 
+
 def combine_heads(inputs, name=None):
     with tf.name_scope(name, default_name="combine_heads", values=[inputs]):
         x = inputs
@@ -475,7 +479,7 @@ def layer_norm(inputs, w_x_inp, params, epsilon=1e-6, dtype=None, scope=None):
 
         w_inp_mean = wr.weight_ratio_mean(inputs, mean, stab=params.stab)
         w_inp_out, w_mean_out = wr.weight_ratio_weighted_sum([inputs, mean],
-                                                             [1.,-1.],
+                                                             [1., -1.],
                                                              averaged,
                                                              stab=params.stab,
                                                              flatten=True)
@@ -485,8 +489,9 @@ def layer_norm(inputs, w_x_inp, params, epsilon=1e-6, dtype=None, scope=None):
         w_x_out = w_x_inp * w_inp_out
         w_x_out += tf.expand_dims(w_x_mean, -1) * w_mean_out
 
-        return {"outputs":norm_inputs * scale + offset,
+        return {"outputs": norm_inputs * scale + offset,
                 "weight_ratios": w_x_out}
+
 
 def multihead_attention_v2n(queries, memories, bias, w_x_inp, num_heads,
                             key_size, value_size, output_size, params,
@@ -575,7 +580,7 @@ def multihead_attention_v2n(queries, memories, bias, w_x_inp, num_heads,
         w_x_v = tf.reshape(w_x_v, [bs, num_heads, tf.shape(w_x_v)[2], -1])
         w_x_att = tf.matmul(weights, w_x_v)
         w_x_att = tf.reshape(w_x_att,
-                        [bs, num_heads, len_q, len_src, key_depth_per_head])
+                             [bs, num_heads, len_q, len_src, key_depth_per_head])
         w_x_att = tf.transpose(w_x_att, [0, 1, 3, 2, 4])
         w_x_att = combine_heads_v2n(w_x_att)
 
@@ -590,4 +595,3 @@ def multihead_attention_v2n(queries, memories, bias, w_x_inp, num_heads,
             w_x_out = w_x_att
 
         return {"weights": weights, "outputs": outputs, "weight_ratio": w_x_out}
-
