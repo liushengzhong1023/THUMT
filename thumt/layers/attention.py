@@ -208,7 +208,7 @@ def attention(query, memories, bias, hidden_size, cache=None, reuse=None,
     """ Standard attention layer
 
     :param query: A tensor with shape [batch, key_size]
-    :param memories: A tensor with shape [batch, memory_size, key_size]
+    :param memories: A tensor with shape [batch, memory_size, key_size], memory_size is the length of input sequence.
     :param bias: A tensor with shape [batch, memory_size]
     :param hidden_size: An integer
     :param cache: A dictionary of precomputed value
@@ -224,30 +224,37 @@ def attention(query, memories, bias, hidden_size, cache=None, reuse=None,
         mem_shape = tf.shape(memories)
         key_size = memories.get_shape().as_list()[-1]
 
+        # projection on keys, if both cache and query None, the function call is used to compute cache
+        # the keys are computed only once, so that can be retrieved directly later.
         if cache is None:
             k = tf.reshape(memories, [-1, key_size])
             k = linear(k, hidden_size, False, False, scope="k_transform")
 
+            # the function call is used to compute the cache
             if query is None:
                 return {"key": k}
         else:
             k = cache["key"]
 
+        # projection on query
         q = linear(query, hidden_size, False, False, scope="q_transform")
         k = tf.reshape(k, [mem_shape[0], mem_shape[1], hidden_size])
 
+        # concatenate the query and the keys
         hidden = tf.tanh(q[:, None, :] + k)
         hidden = tf.reshape(hidden, [-1, hidden_size])
 
-        # Shape: [batch, mem_size, 1]
+        # Shape: [batch, mem_size, 1], linear layer for un-normalized attention weight computation
         logits = linear(hidden, 1, False, False, scope="logits")
         logits = tf.reshape(logits, [-1, mem_shape[1]])
 
         if bias is not None:
             logits = logits + bias
 
+        # normalize the attention weight
         alpha = tf.nn.softmax(logits)
 
+        # value is the weighted sum of context vectors
         outputs = {
             "value": tf.reduce_sum(alpha[:, :, None] * memories, axis=1),
             "weight": alpha

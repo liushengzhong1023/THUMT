@@ -17,7 +17,7 @@ def linear(inputs, output_size, bias, concat=True, dtype=None, scope=None):
     :param concat: a boolean value indicate whether to concatenate all inputs
     :param dtype: an instance of tf.DType
     :param scope: the scope of this layer, the default value is ``linear''
-    :returns: a Tensor with shape [batch, output_size]
+    :returns: a Tensor with shape [batch, output_size], only one output no matter how many input tensors.
     :raises RuntimeError: raises ``RuntimeError'' when input sizes do not
                           compatible with each other
     """
@@ -34,27 +34,32 @@ def linear(inputs, output_size, bias, concat=True, dtype=None, scope=None):
 
         output_shape = tf.concat([tf.shape(inputs[0])[:-1], [output_size]],
                                  axis=0)
-        # Flatten to 2D
+        # Flatten input to 2D
         inputs = [tf.reshape(inp, [-1, inp.shape[-1].value]) for inp in inputs]
 
         results = []
 
         if concat:
+            # Process all inputs together after concatenation
             input_size = sum(input_size)
             inputs = tf.concat(inputs, 1)
 
+            # define the weight matrix for all inputs together
             shape = [input_size, output_size]
             matrix = tf.get_variable("matrix", shape)
             results.append(tf.matmul(inputs, matrix))
         else:
+            # Process each input separately, define separate weight matrix
             for i in range(len(input_size)):
                 shape = [input_size[i], output_size]
                 name = "matrix_%d" % i
                 matrix = tf.get_variable(name, shape)
                 results.append(tf.matmul(inputs[i], matrix))
 
+        # adds up all output vector (if available)
         output = tf.add_n(results)
 
+        # add the bias if specified
         if bias:
             shape = [output_size]
             bias = tf.get_variable("bias", shape)
@@ -68,7 +73,7 @@ def linear(inputs, output_size, bias, concat=True, dtype=None, scope=None):
 def maxout(inputs, output_size, maxpart=2, use_bias=True, concat=True,
            dtype=None, scope=None):
     """
-    Maxout layer
+    Maxout layer, a variation of linear layer with a max-pooling appended.
     :param inputs: see the corresponding description of ``linear''
     :param output_size: see the corresponding description of ``linear''
     :param maxpart: an integer, the default value is 2
@@ -79,9 +84,11 @@ def maxout(inputs, output_size, maxpart=2, use_bias=True, concat=True,
     :returns: a Tensor with shape [batch, output_size]
     :raises RuntimeError: see the corresponding description of ``linear''
     """
-
+    # Note the output_size for linear layer is output_size * maxpart here
     candidate = linear(inputs, output_size * maxpart, use_bias, concat,
                        dtype=dtype, scope=scope or "maxout")
+
+    # Take the max among maxpart elements
     shape = tf.concat([tf.shape(candidate)[:-1], [output_size, maxpart]],
                       axis=0)
     value = tf.reshape(candidate, shape)
@@ -92,7 +99,7 @@ def maxout(inputs, output_size, maxpart=2, use_bias=True, concat=True,
 
 def layer_norm(inputs, epsilon=1e-6, dtype=None, scope=None):
     """
-    Layer Normalization
+    Layer Normalization, perform z-score normalization on last dimension.
     :param inputs: A Tensor of shape [..., channel_size]
     :param epsilon: A floating number
     :param dtype: An optional instance of tf.DType

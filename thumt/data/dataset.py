@@ -171,14 +171,20 @@ def get_training_input(filenames, params):
 
 
 def sort_input_file(filename, reverse=True):
+    '''
+    Sorted_keys: from original index --> sorted index
+    sorted_inputs: sorted sentences, according to their length order.
+    '''
     # Read file
     with tf.gfile.Open(filename) as fd:
         inputs = [line.strip() for line in fd]
 
+    # Get length for each input sample.
     input_lens = [
         (i, len(line.strip().split())) for i, line in enumerate(inputs)
     ]
 
+    # Sort the sentence according to their lengths
     sorted_input_lens = sorted(input_lens, key=operator.itemgetter(1),
                                reverse=reverse)
     sorted_keys = {}
@@ -277,6 +283,9 @@ def get_evaluation_input(inputs, params):
 
 
 def get_inference_input(inputs, params):
+    '''
+    Inputs is a list of sentences, each of which is a list of words.
+    '''
     if params.generate_samples:
         batch_size = params.sample_batch_size
     else:
@@ -297,12 +306,13 @@ def get_inference_input(inputs, params):
             num_parallel_calls=params.num_threads
         )
 
-        # Convert tuple to dictionary
+        # Convert tuple to dictionary, attach the length information
         dataset = dataset.map(
             lambda x: {"source": x, "source_length": tf.shape(x)[0]},
             num_parallel_calls=params.num_threads
         )
 
+        # formulate the batch
         dataset = dataset.padded_batch(
             batch_size * len(params.device_list),
             {"source": [tf.Dimension(None)], "source_length": []},
@@ -312,10 +322,13 @@ def get_inference_input(inputs, params):
         iterator = dataset.make_one_shot_iterator()
         features = iterator.get_next()
 
+        # construct the index table for source words
         src_table = tf.contrib.lookup.index_table_from_tensor(
             tf.constant(params.vocabulary["source"]),
             default_value=params.mapping["source"][params.unk]
         )
+
+        # map the source words into source indices
         features["source"] = src_table.lookup(features["source"])
 
         return features

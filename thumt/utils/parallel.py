@@ -12,6 +12,9 @@ import tensorflow as tf
 
 
 def _maybe_repeat(x, n):
+    '''
+    Repeat the item or function x for n times.
+    '''
     if isinstance(x, list):
         assert len(x) == n
         return x
@@ -21,10 +24,14 @@ def _maybe_repeat(x, n):
 
 # Data-level parallelism
 def data_parallelism(devices, fn, *args, **kwargs):
+    '''
+    Partition the fn calls among different devices.
+    Return: a list of function calls for each device.
+    '''
     num_worker = len(devices)
     devices = ["gpu:%d" % d for d in devices]
 
-    # Replicate args and kwargs
+    # Replicate args and kwargs, stored in list new_args and new_kwargs
     if args:
         new_args = [_maybe_repeat(arg, num_worker) for arg in args]
         # Transpose
@@ -40,6 +47,7 @@ def data_parallelism(devices, fn, *args, **kwargs):
         for i in range(num_worker):
             new_kwargs[i][k] = vals[i]
 
+    # Replicate the function for num_worker times
     fns = _maybe_repeat(fn, num_worker)
 
     # Now make the parallel call.

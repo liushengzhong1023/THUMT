@@ -163,6 +163,9 @@ def session_config(params):
 
 
 def set_variables(var_list, value_dict, prefix, feed_dict):
+    '''
+    tf.assing(var, placeholder) create a op that assign the value of var to the placeholder.
+    '''
     ops = []
     for var in var_list:
         for name in value_dict:
@@ -182,16 +185,22 @@ def set_variables(var_list, value_dict, prefix, feed_dict):
 
 
 def shard_features(features, placeholders, predictions):
+    '''
+    Partition features and operations among devices. Each device has a separate placeholder.
+    predictions: denote the prediction operations, not the prediction result.
+    '''
     num_shards = len(placeholders)
     feed_dict = {}
     n = 0
 
+    # name includes 'source', 'source_length'
     for name in features:
         feat = features[name]
         batch = feat.shape[0]
         shard_size = (batch + num_shards - 1) // num_shards
 
         for i in range(num_shards):
+            # partition the data samples within one batch
             shard_feat = feat[i * shard_size:(i + 1) * shard_size]
 
             if shard_feat.shape[0] != 0:
@@ -208,17 +217,24 @@ def shard_features(features, placeholders, predictions):
 
 def main(args):
     tf.logging.set_verbosity(tf.logging.INFO)
+
     # Load configs
     model_cls_list = [models.get_model(model) for model in args.models]
     params_list = [default_parameters() for _ in range(len(model_cls_list))]
+
+    # merge model default parameters
     params_list = [
         merge_parameters(params, model_cls.get_parameters())
         for params, model_cls in zip(params_list, model_cls_list)
     ]
+
+    # import parameters from the file
     params_list = [
         import_params(args.checkpoints[i], args.models[i], params_list[i])
         for i in range(len(args.checkpoints))
     ]
+
+    # override the parameters from the command line
     params_list = [
         override_parameters(params_list[i], args)
         for i in range(len(model_cls_list))
@@ -228,7 +244,7 @@ def main(args):
     with tf.Graph().as_default():
         model_var_lists = []
 
-        # Load checkpoints
+        # Load checkpoints, can load multiple checkpoints
         for i, checkpoint in enumerate(args.checkpoints):
             tf.logging.info("Loading %s" % checkpoint)
             var_list = tf.train.list_variables(checkpoint)
@@ -256,11 +272,16 @@ def main(args):
             model_list.append(model)
 
         params = params_list[0]
-        # Read input file
+
+        # Read input file,
+        # sorted_keys: original_index --> sorted_index,
+        # sorted_inputs: list of sentences by length order
         sorted_keys, sorted_inputs = dataset.sort_input_file(args.input)
-        # Build input queue
+
+        # Build input queue, returnd is a batch of features: [batch, sequence length, embedding size]
         features = dataset.get_inference_input(sorted_inputs, params)
-        # Create placeholders
+
+        # Create placeholders, one placeholder for one device
         placeholders = []
 
         for i in range(len(params.device_list)):
@@ -277,7 +298,8 @@ def main(args):
         else:
             inference_fn = inference.create_inference_graph
 
-        predictions = parallel.data_parallelism(
+        # Duplicate the function calls, to be assigned to different devices.
+        prediction_fns = parallel.data_parallelism(
             params.device_list, lambda f: inference_fn(model_list, f, params),
             placeholders)
 
@@ -313,9 +335,14 @@ def main(args):
 
             while True:
                 try:
+                    # get input features from single machine
                     feats = sess.run(features)
+
+                    # partition the operations and data samples, op is the function call for the inference_fn
                     op, feed_dict = shard_features(feats, placeholders,
-                                                   predictions)
+                                                   prediction_fns)
+
+                    # distributed inference
                     results.append(sess.run(op, feed_dict=feed_dict))
                     message = "Finished batch %d" % len(results)
                     tf.logging.log(tf.logging.INFO, message)
@@ -326,7 +353,7 @@ def main(args):
         vocab = params.vocabulary["target"]
         outputs = []
         scores = []
-
+        # result corresponds to one batch, shard corresponds to one shard (device)
         for result in results:
             for shard in result:
                 for item in shard[0]:
@@ -343,7 +370,7 @@ def main(args):
             restored_outputs.append(outputs[sorted_keys[index]])
             restored_scores.append(scores[sorted_keys[index]])
 
-        # Write to file
+        # Write the prediction results to file
         if sys.version_info.major == 2:
             outfile = open(args.output, "w")
         elif sys.version_info.major == 3:
@@ -372,6 +399,7 @@ def main(args):
 
             count += 1
         outfile.close()
+
 
 if __name__ == "__main__":
     main(parse_args())

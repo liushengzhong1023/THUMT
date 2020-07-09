@@ -188,6 +188,7 @@ def merge_parameters(params1, params2):
 def override_parameters(params, args):
     '''
     Use the argparser args to overide tf.contrib.training.HParams.
+    Also, the vocabularies are loaded in this function.
     params: tf.contrib.training.HParams
     args: ArgParser
     '''
