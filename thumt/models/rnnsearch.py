@@ -29,7 +29,7 @@ def _gru_encoder(cell, inputs, sequence_length, initial_state, dtype=None):
     cell: the defined GRU cell
     inputs: [batch, sequence_length, embedding_size]
     initial_state: [batch, rnn_size], may be None
-    sequence_length: [batch, 1]
+    sequence_length: [batch]
     Define the recurrent structure of one RNN layer.
     '''
     # Assume that the underlying cell is GRUCell-like
@@ -126,12 +126,11 @@ def _encoder(cell_fw, cell_bw, inputs, sequence_length, dtype=None,
         return results
 
 
-def _decoder(cell, inputs, memory, sequence_length, initial_state, dtype=None,
-             scope=None):
+def _decoder(cell, inputs, memory, sequence_length, initial_state, dtype=None, scope=None):
     '''
     inputs: [batch, sequence length, embedding size]
     memory: the annotation of the encoder, which is [batch, sequence length, 2 * output size]
-    sequence_length: [batch, 1], the length of each target sentence
+    sequence_length: [batch], the length of each target sentence
     initial_stage: [batch, hidden size], the last hidden state of encoder.
     '''
     # Assume that the underlying cell is GRUCell-like

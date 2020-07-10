@@ -215,8 +215,8 @@ def attention(query, memories, bias, hidden_size, cache=None, reuse=None,
     :param reuse: A boolean value, whether to reuse the scope
     :param dtype: An optional instance of tf.DType
     :param scope: An optional string, the scope of this layer
-    :return: A tensor with shape [batch, value_size] and
-        a Tensor with shape [batch, memory_size]
+    :return: A tensor context vector with shape [batch, value_size] and
+        a Tensor of attention weight with shape [batch, memory_size]
     """
 
     with tf.variable_scope(scope or "attention", reuse=reuse,

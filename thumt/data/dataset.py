@@ -82,7 +82,7 @@ def batch_examples(example, batch_size, max_length, mantissa_bits,
 
 
 def get_training_input(filenames, params):
-    """ Get input for training stage
+    """ Get input for training stage, both source sentence and target sentence are processed together.
 
     :param filenames: A list contains [source_filenames, target_filenames]
     :param params: Hyper-parameters
@@ -285,6 +285,7 @@ def get_evaluation_input(inputs, params):
 def get_inference_input(inputs, params):
     '''
     Inputs is a list of sentences, each of which is a list of words.
+    Process source sentence only.
     '''
     if params.generate_samples:
         batch_size = params.sample_batch_size
@@ -335,12 +336,16 @@ def get_inference_input(inputs, params):
 
 
 def get_relevance_input(inputs, outputs, params):
+    '''
+    Both source sentence and predicted sentence are processed separately.
+    Return: features, integrating both source, source length, target, and target length.
+    '''
     # inputs
     dataset = tf.data.Dataset.from_tensor_slices(
         tf.constant(inputs)
     )
 
-    # Split string
+    # Split string into list of words
     dataset = dataset.map(lambda x: tf.string_split([x]).values,
                           num_parallel_calls=params.num_threads)
 
@@ -350,12 +355,13 @@ def get_relevance_input(inputs, outputs, params):
         num_parallel_calls=params.num_threads
     )
 
-    # Convert tuple to dictionary
+    # Convert tuple to dictionary, two keys: 'source' and 'source_length'
     dataset = dataset.map(
         lambda x: {"source": x, "source_length": tf.shape(x)[0]},
         num_parallel_calls=params.num_threads
     )
 
+    # Formulate the batch
     dataset = dataset.padded_batch(
         params.decode_batch_size,
         {"source": [tf.Dimension(None)], "source_length": []},
@@ -365,13 +371,14 @@ def get_relevance_input(inputs, outputs, params):
     iterator = dataset.make_one_shot_iterator()
     features = iterator.get_next()
 
+    # Get source vocabulary table and covert the sentences into list of indices
     src_table = tf.contrib.lookup.index_table_from_tensor(
         tf.constant(params.vocabulary["source"]),
         default_value=params.mapping["source"][params.unk]
     )
     features["source"] = src_table.lookup(features["source"])
 
-    # outputs
+    # outputs dataset (translation, not the groundtruth)
     dataset_o = tf.data.Dataset.from_tensor_slices(
         tf.constant(outputs)
     )
@@ -386,12 +393,13 @@ def get_relevance_input(inputs, outputs, params):
         num_parallel_calls=params.num_threads
     )
 
-    # Convert tuple to dictionary
+    # Convert tuple to dictionary, two keys: 'target', 'target_length'
     dataset_o = dataset_o.map(
         lambda x: {"target": x, "target_length": tf.shape(x)[0]},
         num_parallel_calls=params.num_threads
     )
 
+    # Formulate the batch for target data samples
     dataset_o = dataset_o.padded_batch(
         params.decode_batch_size,
         {"target": [tf.Dimension(None)], "target_length": []},
@@ -401,11 +409,12 @@ def get_relevance_input(inputs, outputs, params):
     iterator = dataset_o.make_one_shot_iterator()
     features_o = iterator.get_next()
 
-    src_table = tf.contrib.lookup.index_table_from_tensor(
+    # Get target vocabulary table and covert the sentences into list of indices.
+    tgt_table = tf.contrib.lookup.index_table_from_tensor(
         tf.constant(params.vocabulary["target"]),
         default_value=params.mapping["target"][params.unk]
     )
-    features["target"] = src_table.lookup(features_o["target"])
+    features["target"] = tgt_table.lookup(features_o["target"])
     features["target_length"] = features_o["target_length"]
 
     return features

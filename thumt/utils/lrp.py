@@ -254,6 +254,7 @@ def maxout_v2n(inputs, output_size, maxpart, w, params, use_bias=True,
 
     weight_ratios = [w_x_maxout]
 
+    # return a dictionary: 'output' and 'weight_ratios'
     return {"output": output, "weight_ratios": weight_ratios}
 
 
@@ -276,15 +277,20 @@ class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
             if not isinstance(inputs, (list, tuple)):
                 inputs = [inputs]
 
+            # bs=batch size, emb=embedding size
             bs = tf.shape(w_x_h_last)[0]
             emb = tf.shape(inputs)[-1]
             w_x_x = tf.ones([bs, 1, emb], dtype=tf.float32)
             all_inputs = list(inputs) + [state]
+
+            # reset gate
             r_linear = linear_v2n(all_inputs, self._num_units, False,
                                   [w_x_x, w_x_h_last], params, False,
                                   scope="reset_gate", d2=True)
             w_x_r, w_xlast_r = r_linear["weight_ratios"]
             r = tf.nn.sigmoid(r_linear["output"])
+
+            # update gate
             u_linear = linear_v2n(all_inputs, self._num_units, False,
                                   [w_x_x, w_x_h_last], params, False,
                                   scope="update_gate", d2=True)

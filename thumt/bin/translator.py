@@ -164,7 +164,7 @@ def session_config(params):
 
 def set_variables(var_list, value_dict, prefix, feed_dict):
     '''
-    tf.assing(var, placeholder) create a op that assign the value of var to the placeholder.
+    tf.assign(var, placeholder) create a op that assign the value of var to the placeholder.
     '''
     ops = []
     for var in var_list:

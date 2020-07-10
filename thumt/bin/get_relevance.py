@@ -169,6 +169,9 @@ def session_config(params):
 
 
 def set_variables(var_list, value_dict, prefix):
+    '''
+    tf.assign(var, placeholder) create a op that assign the value of var to the placeholder.
+    '''
     ops = []
     for var in var_list:
         for name in value_dict:
@@ -186,24 +189,33 @@ def set_variables(var_list, value_dict, prefix):
 
 def main(args):
     tf.logging.set_verbosity(tf.logging.INFO)
-    # Load configs
+
+    # Load configs, note here the param lrp=True, load differently as training and inference
     model_cls_list = [models.get_model(model, lrp=True)
                       for model in args.models]
+
+    # General default parameters
     params_list = [default_parameters() for _ in range(len(model_cls_list))]
+
+    # Merge model default parameters
     params_list = [
         merge_parameters(params, model_cls.get_parameters())
         for params, model_cls in zip(params_list, model_cls_list)
     ]
+
+    # Import parameters from file
     params_list = [
         import_params(args.checkpoints[i], args.models[i], params_list[i])
         for i in range(len(args.checkpoints))
     ]
+
+    # Override parameters by command lines
     params_list = [
         override_parameters(params_list[i], args)
         for i in range(len(model_cls_list))
     ]
 
-    # Build Graph
+    # Build Graph, get model_var_lists
     with tf.Graph().as_default():
         model_var_lists = []
 
@@ -226,29 +238,36 @@ def main(args):
 
             model_var_lists.append(values)
 
-        # Build models
+        # Build models, load all models in the ckpt path
         model_fns = []
 
         for i in range(len(args.checkpoints)):
             name = model_cls_list[i].get_name()
             model = model_cls_list[i](params_list[i], name + "_%d" % i)
+
+            # define the model_fn as the get_relevance_func, note here we use the model version with LRP
             model_fn = model.get_relevance_func()
             model_fns.append(model_fn)
 
         params = params_list[0]
-        # Read input file
+
+        # Read input file, input is the source features, output is the translation produced
         with tf.gfile.Open(args.input) as fd:
             inputs = [line.strip() for line in fd]
         with tf.gfile.Open(args.output) as fd:
             outputs = [line.strip() for line in fd]
-        # Build input queue
+
+        # Build input queue, features contain: source, source_length, target, target_length
         features = dataset.get_relevance_input(inputs, outputs, params)
+
+        # Compute the relevances, only define the operations here.
         relevances = model_fns[0](features, params)
 
         assign_ops = []
 
         all_var_list = tf.trainable_variables()
 
+        # Each checkpoint is a model version. what for? what is un_init_var_list, what is model_var_lists?
         for i in range(len(args.checkpoints)):
             un_init_var_list = []
             name = model_cls_list[i].get_name()
@@ -273,14 +292,19 @@ def main(args):
 
         # Create session
         with tf.train.MonitoredSession(session_creator=sess_creator) as sess:
-            # Restore variables
+            # Restore variables, what is assign_op used for? Assign operations to ditributed devices?
             sess.run(assign_op)
+
             if not os.path.exists(args.relevances):
                 os.makedirs(args.relevances)
+
             count = 0
             while not sess.should_stop():
+                # run one batch, get source, target, relevance, and loss
                 src_seq, trg_seq, rlv_info, loss = sess.run(relevances)
                 message = "Finished batch"" %d" % count
+
+                # store the relevance information for each single (source, target) pair, write to the relevance file
                 for i in range(src_seq.shape[0]):
                     count += 1
                     src = to_text(params.vocabulary["source"],
