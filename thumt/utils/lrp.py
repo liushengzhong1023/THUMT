@@ -27,8 +27,9 @@ def reduce_reserve(matrix, axis):
 
 def v2n_propagate_linear(w_x_last, w_linear):
     '''
-        w_x_last: [bs, len_src, len, d]
-        w_linear: [b, len, d, d]
+        Propagate the weight ratio through a linear layer.
+        w_x_last: [bs, len_src, len, d], previous weight ratios.
+        w_linear: [b, len, d, d], weight ratio distribution among the linear layer.
         return: [b, len_src, len, d]
     '''
     len_src = tf.shape(w_x_last)[1]
@@ -43,7 +44,8 @@ def v2n_propagate_linear(w_x_last, w_linear):
 def create_diagonal_v2n(batchsize, length, dim):
     '''
         diagonal matrix (batchsize, len_src, len_src, dim)
-	result[bs, len_src, len_src, dim] = 1
+        len_src: length of the source sentence.
+	    result[bs, len_src, len_src, dim] = 1
     '''
     result = tf.diag(tf.ones([length], dtype=tf.float32))
     result = tf.expand_dims(result, 0)
@@ -53,6 +55,10 @@ def create_diagonal_v2n(batchsize, length, dim):
 
 
 def stabilize(matrix, stab):
+    '''
+    Add noise of scale stab to all positions.
+    Positive noise for positive and 0 positions, and negative noise for negative positions.
+    '''
     sign = tf.sign(matrix)
     zero_pos = tf.equal(sign, tf.zeros(tf.shape(sign)))
     zero_pos = tf.cast(zero_pos, tf.float32)
@@ -62,11 +68,17 @@ def stabilize(matrix, stab):
 
 
 def normalize(matrix):
+    '''
+    Normalize the matrix by the last dimension.
+    '''
     total = tf.reduce_sum(tf.abs(matrix), axis=-1)
     return matrix / tf.expand_dims(total, axis=-1)
 
 
 def dot_product(inputs, params):
+    '''
+    Perform dot products among all inputs in the given list, maybe more than 2 inputs.
+    '''
     output = tf.identity(inputs[0])
     for i in range(1, len(inputs)):
         output *= inputs[i]
@@ -77,6 +89,9 @@ def dot_product(inputs, params):
 
 
 def weighted_sum(inputs, weights, params, flatten=False):
+    '''
+    Compute weighted sum and update the weighted ratios.
+    '''
     assert len(inputs) == len(weights)
     output = tf.add_n([inputs[i] * weights[i] for i in range(len(inputs))])
 
@@ -88,6 +103,9 @@ def weighted_sum(inputs, weights, params, flatten=False):
 
 
 def maxpool(input, output_size, params, flatten=False):
+    '''
+    Perform max pooling at last dimension and update the weight ratios.
+    '''
     shape = tf.concat([tf.shape(input)[:-1], [output_size, params.maxnum]],
                       axis=0)
     value = tf.reshape(input, shape)
@@ -99,24 +117,36 @@ def maxpool(input, output_size, params, flatten=False):
 
 def weight_ratio_linear_v2n_2d(inputs, weights, output, w_x_inp, bias=None,
                                stab=0):
+    '''
+    Compute the weight ratios for 2-dim linear layer.
+    To use the weight ratio function for linear layer, need to create a fake lq dimension, which is squeezed at last.
+    '''
+    # expand dimension for lq
     inputs_ex = [tf.expand_dims(inp, 1) for inp in inputs]
     output_ex = tf.expand_dims(output, 1)
     w_x_inp_ex = [tf.expand_dims(w, 2) for w in w_x_inp]
+
+    # compute weight ratios in forward direction
     result = weight_ratio_linear_v2n(inputs_ex, weights, output_ex,
                                      w_x_inp_ex, bias=bias, stab=stab)
+
+    # squeeze the expanded dimension
     result = [tf.squeeze(res, 2) for res in result]
+
     return result
 
 
 def weight_ratio_linear_v2n(inputs, weights, output, w_x_inp, bias=None,
                             stab=0):
     '''
+        Matrix operations: y = w_1 * x_1 + w_2 * x_2 ... + w_t * x_t, only compute weight ratios.
         inputs: [(bs, lq, di)]
-        weights: [(di, do)]
-        bias: (do)
+        weights: [(di, do)], dim_in --> dim_out
+        bias: (do), dim_out
         output: (bs, lq, do)
-        w_x_inp: [(bs, ls, lq, di)]
-        weight ratios: [(bs, ls, lq, do)]
+        w_x_inp: [(bs, ls, lq, di)], the input weight ratios?
+                 Looks like the weight ratio is propagated in forward direction?
+        weight ratios: [(bs, ls, lq, do)], return the output weight ratios?
     '''
     assert len(inputs) == len(weights)
     weight_ratios = []
@@ -265,6 +295,7 @@ class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
     :param reuse: (optional) Python boolean describing whether to reuse
         variables in an existing scope.  If not `True`, and the existing
         scope already has the given variables, an error is raised.
+        w naming: w_input_output
     """
 
     def __init__(self, num_units, reuse=None):
@@ -278,49 +309,54 @@ class LegacyGRUCell_encoder_v2n(tf.nn.rnn_cell.RNNCell):
                 inputs = [inputs]
 
             # bs=batch size, emb=embedding size
+            # w_x_x is the identity weight ratio in embedding size.
             bs = tf.shape(w_x_h_last)[0]
             emb = tf.shape(inputs)[-1]
             w_x_x = tf.ones([bs, 1, emb], dtype=tf.float32)
+
+            # all_inputs: current inputs and previous state
             all_inputs = list(inputs) + [state]
 
-            # reset gate
+            # reset gate, order: current input, previous hidden state
             r_linear = linear_v2n(all_inputs, self._num_units, False,
                                   [w_x_x, w_x_h_last], params, False,
                                   scope="reset_gate", d2=True)
             w_x_r, w_xlast_r = r_linear["weight_ratios"]
             r = tf.nn.sigmoid(r_linear["output"])
 
-            # update gate
+            # update gate, same but in parallel as reset gate
             u_linear = linear_v2n(all_inputs, self._num_units, False,
                                   [w_x_x, w_x_h_last], params, False,
                                   scope="update_gate", d2=True)
             w_x_u, w_xlast_u = u_linear["weight_ratios"]
             u = tf.nn.sigmoid(u_linear["output"])
 
+            # candidate state for current step, ~h_t = tanh(W \dot [r_t * h_t-1, x_t]), stored in c
+            # concatenate weight ratios for concatenated input in reset gate
+            # All weights of reseted go to reset gate, while nothing goes to state?
             reseted = r * state
             w_x_reseted = w_x_r
             w_xlast_reseted = w_xlast_r
-
             w_tx_reseted = tf.concat([w_x_reseted, w_xlast_reseted], 1)
+
             all_inputs = list(inputs) + [reseted]
             c_linear = linear_v2n(all_inputs, self._num_units, True,
                                   [w_x_x, w_tx_reseted], params, False,
                                   scope="candidate", d2=True)
             w_x_c_direct, w_tx_reseted_c = c_linear["weight_ratios"]
-            w_x_reseted_c, w_xlast_c = tf.split(w_tx_reseted_c,
-                                                [1, tf.shape(w_tx_reseted_c)[1] - 1],
-                                                axis=1)
-            w_x_c = w_x_c_direct + w_x_reseted_c
+            w_x_reseted_c, w_xlast_c = tf.split(w_tx_reseted_c, [1, tf.shape(w_tx_reseted_c)[1] - 1], axis=1)
+            w_x_c = w_x_c_direct + w_x_reseted_c  # add two weights for current input x, because it is used twice yet
             c = c_linear["output"]
 
+            # compute final state of current step, h_t = (1 - u_t) * h_t-1 + u_t * ~h_t
+            # Here for each part, all weights go to source, nothing goes to gate?
             h1 = u * tf.tanh(c)
             h2 = (1.0 - u) * state
             new_state = h1 + h2
             new_state_stab = stabilize(new_state, params.stab)
             w_x_newh = w_x_c * tf.expand_dims(h1 / new_state_stab, axis=1)
-            w_xlast_newh = \
-                w_xlast_c * tf.expand_dims(h1 / new_state_stab, axis=1) + \
-                w_x_h_last * tf.expand_dims(h2 / new_state_stab, axis=1)
+            w_xlast_newh = w_xlast_c * tf.expand_dims(h1 / new_state_stab, axis=1) + \
+                           w_x_h_last * tf.expand_dims(h2 / new_state_stab, axis=1)
 
         return new_state, new_state, w_xlast_newh, w_x_newh
 
@@ -340,6 +376,10 @@ class LegacyGRUCell_decoder_v2n(tf.nn.rnn_cell.RNNCell):
     :param reuse: (optional) Python boolean describing whether to reuse
         variables in an existing scope.  If not `True`, and the existing
         scope already has the given variables, an error is raised.
+    Weight ratios:
+        w_x_y: the weight ratio from input word x to output word y.
+        w_x_h: the weight ratio from input word x to decoder hidden state h.
+        w_x_c: the weight ratio from input word x to context vector of current step.
     """
 
     def __init__(self, num_units, reuse=None):
@@ -354,7 +394,14 @@ class LegacyGRUCell_decoder_v2n(tf.nn.rnn_cell.RNNCell):
 
             bs = tf.shape(w_x_h_last)[0]
             emb = tf.shape(inputs[0])[-1]
+
+            # In encoder cell, the default weight ratio is 1; here for the decoder, they use 0.
+            # By default, the weight ratio from x to target sentence y is 0.
             w_x_y = tf.zeros([bs, 1, emb], dtype=tf.float32)
+
+            # reset gate
+            # cell_input = [inp_t, context], all_inputs = [inp_t, context, previous_state]
+            # ctx: context
             all_inputs = list(inputs) + [state]
             w_x_h = w_x_h_last
             w_x_ctx = w_x_c
@@ -362,9 +409,10 @@ class LegacyGRUCell_decoder_v2n(tf.nn.rnn_cell.RNNCell):
                                   [w_x_y, w_x_c, w_x_h_last], params, False,
                                   scope="reset_gate", d2=True)
             _, w_x_ctx_r, w_x_h_r = r_linear["weight_ratios"]
-            w_x_r = w_x_ctx_r + w_x_h_r
+            w_x_r = w_x_ctx_r + w_x_h_r  # the weight ratio from x to reset gate is the sum of context and previous state.
             r = tf.nn.sigmoid(r_linear["output"])
 
+            # update gate
             u_linear = linear_v2n(all_inputs, self._num_units, False,
                                   [w_x_y, w_x_c, w_x_h_last], params, False,
                                   scope="update_gate", d2=True)
@@ -372,9 +420,11 @@ class LegacyGRUCell_decoder_v2n(tf.nn.rnn_cell.RNNCell):
             w_x_u = w_x_ctx_u + w_x_h_u
             u = tf.nn.sigmoid(u_linear["output"])
 
+            # candidate state for current step, ~h_t = tanh(W \dot [r_t * h_t-1, x_t]), stored in c
+            # Note: different w_x_reseted construction here.
+            # Half weight goes to reset gate, the other half goes to previous hidden state.
             reseted = r * state
             w_x_reseted = 0.5 * w_x_r + 0.5 * w_x_h
-
             all_inputs = list(inputs) + [reseted]
             c_linear = linear_v2n(all_inputs, self._num_units, True,
                                   [w_x_y, w_x_c, w_x_reseted], params, False,
@@ -383,12 +433,13 @@ class LegacyGRUCell_decoder_v2n(tf.nn.rnn_cell.RNNCell):
             w_x_state = w_x_c_state + w_x_resetes_state
             c = c_linear["output"]
 
+            # get final state for this step
+            # For both h1 and h2, the weight ratio is the average of the gate neuron and the source neuron
             h1 = u * tf.tanh(c)
             h2 = (1.0 - u) * state
             w_x_h1 = 0.5 * w_x_state + 0.5 * w_x_u
             w_x_h2 = 0.5 * w_x_u + 0.5 * w_x_h
-
-            newh_ws = weighted_sum([h1, h2], [1., 1.], params, flatten=True)
+            newh_ws = weighted_sum([h1, h2], [1., 1.], params, flatten=True)  # use the weighted_sum to compute sum?
             new_state = newh_ws["output"]
             w_h1_newh, w_h2_newh = newh_ws["weight_ratios"]
             w_h1_newh = tf.expand_dims(w_h1_newh, 1)

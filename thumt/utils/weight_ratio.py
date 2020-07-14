@@ -14,6 +14,7 @@ import math
 from thumt.layers.nn import linear
 from thumt.layers.attention import split_heads, combine_heads
 
+
 def create_diagonal(output):
     '''
         output: (batchsize, dim)
@@ -29,16 +30,20 @@ def create_diagonal(output):
 
 def weight_ratio_mean(input, output, stab=0):
     '''
+        Compute the weight ratio distribution for inputs over their mean.
         inputs: (..., dim)
         output: (..., 1)
         weight ratios: [(..., dim)]
     '''
+    # get size of last dimension
     dim = tf.cast(tf.shape(input)[-1], tf.float32)
     output_shape = tf.shape(input)
+
     # Flatten to 2D
     inputs = tf.reshape(input, [-1, input.shape[-1].value])
     output = tf.reshape(output, [-1, output.shape[-1].value])
 
+    # distribute the relevance of output among input according to their contributions
     w = inputs / dim / stabilize(output, stab)
 
     return tf.reshape(w, output_shape)
@@ -55,6 +60,8 @@ def stabilize(matrix, stab):
 
 def weight_ratio_linear(inputs, weights, output, bias=None, stab=0):
     '''
+        Get the weight ratio assigned from output back to each input and its positions.
+        Matrix operations: y = w_1 * x_1 + w_2 * x_2 ... + w_t * x_t
         inputs: [(..., dim_in_i)]
         weights: [(dim_in_i, dim_out)]
         bias: [(dim_out)]
@@ -62,39 +69,47 @@ def weight_ratio_linear(inputs, weights, output, bias=None, stab=0):
         weight ratios: [(..., dim_in_i, dim_out)]
     '''
     assert len(inputs) == len(weights)
+
+    # os: output shape, [..., dim_in_i, dim_out]
     output_shape = []
     for i in range(len(inputs)):
-        os = tf.concat([tf.shape(inputs[i]),tf.shape(weights[i])[-1:]],-1)
+        os = tf.concat([tf.shape(inputs[i]), tf.shape(weights[i])[-1:]], -1)
         output_shape.append(os)
-    # Flatten to 2D
+
+    # Flatten both inputs and output to 2D
     inputs = [tf.reshape(inp, [-1, inp.shape[-1].value]) for inp in inputs]
     output = tf.reshape(output, [-1, output.shape[-1].value])
 
     weight_ratios = []
 
     for i in range(len(inputs)):
-        r = tf.expand_dims(inputs[i],-1) * tf.expand_dims(weights[i], -3)
+        # [..., dim_in_i, dim_out], input times its weight
+        r = tf.expand_dims(inputs[i], -1) * tf.expand_dims(weights[i], -3)
         w = r / tf.expand_dims(stabilize(output, stab), -2)
         weight_ratios.append(w)
 
     weight_ratios = [tf.reshape(wr, os)
-                     for os, wr in zip(output_shape,weight_ratios)]
+                     for os, wr in zip(output_shape, weight_ratios)]
 
     return weight_ratios
 
 
 def weight_ratio_weighted_sum(inputs, weights, output, stab=0, flatten=False):
     '''
+        Scalar weights: y = w_1 * x_1 + w_2 * x_2 ... + w_t * x_t, all inputs and outputs have the same dimension.
         inputs: [(..., dim)]
         weights: [scalar]
         output: (..., dim)
         weight_ratios: [(..., dim, dim)]
     '''
     assert len(inputs) == len(weights)
+
+    # shape: [(..., dim, dim)]
     if flatten:
         output_shape = tf.shape(output)
     else:
         output_shape = tf.concat([tf.shape(output), tf.shape(output)[-1:]], -1)
+
     # Flatten to 2D
     inputs = [tf.reshape(inp, [-1, tf.shape(inp)[-1]]) for inp in inputs]
     output = tf.reshape(output, [-1, tf.shape(output)[-1]])
@@ -113,12 +128,14 @@ def weight_ratio_weighted_sum(inputs, weights, output, stab=0, flatten=False):
 
 def weight_ratio_maxpool(input, output, maxnum, flatten=False):
     '''
+        Assign the weight to the maximal input only.
         inputs: (..., dim)
         output: (..., dim/maxpart)
         weight_ratios: (..., dim, dim/maxnum)
     '''
     # Flatten to 2D
     maxnum = tf.constant(maxnum, dtype=tf.int32)
+    # (..., dim, dim/maxnum)
     weight_shape = tf.concat([tf.shape(input), tf.shape(output)[-1:]], axis=-1)
     input = tf.reshape(input, [-1, input.shape[-1].value])
     output = tf.reshape(output, [-1, output.shape[-1].value])
@@ -126,11 +143,11 @@ def weight_ratio_maxpool(input, output, maxnum, flatten=False):
     shape_inp = tf.shape(input)
     batch = shape_inp[0]
     dim_in = shape_inp[-1]
-    shape = tf.concat([shape_inp[:-1], [shape_inp[-1] // maxnum, maxnum]],
-                      axis=0)
+    shape = tf.concat([shape_inp[:-1], [shape_inp[-1] // maxnum, maxnum]], axis=0)
     dim_out = shape[-2]
     value = tf.reshape(input, shape)
 
+    # take maximum at the last dimension, pos record the positions
     pos = tf.argmax(value, -1)
     pos = tf.cast(pos, tf.int32)
     pos = tf.reshape(pos, [-1])
@@ -142,7 +159,7 @@ def weight_ratio_maxpool(input, output, maxnum, flatten=False):
     else:
         indices = dim_out * pos + dim_in * tf.range(batch * dim_out,
                                                     dtype=tf.int32)
-        indices = tf.reshape(indices, [-1,dim_out])
+        indices = tf.reshape(indices, [-1, dim_out])
         indices += tf.expand_dims(tf.range(dim_out, dtype=tf.int32), 0)
         indices = tf.reshape(indices, [-1])
 
