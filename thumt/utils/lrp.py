@@ -247,7 +247,7 @@ def linear_v2n(inputs, output_size, bias, w_x_inp, params, concat=False,
 def maxout_v2n(inputs, output_size, maxpart, w, params, use_bias=True,
                concat=True, dtype=None, scope=None):
     """
-    Maxout layer
+    Maxout layer, only used before the final prediction.
     :param inputs: see the corresponding description of ``linear''
     :param output_size: see the corresponding description of ``linear''
     :param maxpart: an integer, the default value is 2
@@ -258,28 +258,41 @@ def maxout_v2n(inputs, output_size, maxpart, w, params, use_bias=True,
     :returns: a Tensor with shape [batch, output_size]
     :raises RuntimeError: see the corresponding description of ``linear''
     """
-
+    # shape: [output_time_steps (hidden states), batch, time_steps (input positions), decoder_output_size]
+    # transposed shape: [batch, time_steps (input positions), output_time_steps (hidden states), decoder_output_size]
+    #     inputs = [
+    #         shifted_tgt_inputs,
+    #         shifted_outputs,
+    #         decoder_output["values"]
+    #     ]
     w_x_dec, w_x_ctx = w
     w_x_dec = tf.transpose(w_x_dec, [1, 2, 0, 3])
     w_x_ctx = tf.transpose(w_x_ctx, [1, 2, 0, 3])
     w_x_y = tf.zeros(tf.shape(w_x_dec), dtype=tf.float32)
+
+    # compute candidate, do weighted sum and linaer projection on all input parts
     candidate_linear = linear_v2n(inputs, output_size * maxpart, use_bias,
                                   [w_x_y, w_x_dec, w_x_ctx], params, concat,
                                   dtype=dtype, scope=scope or "maxout")
     candidate = candidate_linear["output"]
     _, w_x_dec_readout, w_x_ctx_readout = candidate_linear["weight_ratios"]
+
+    # shape: [batch, time_steps (input positions), output_time_steps (hidden states), decoder_output_size]
     w_x_readout = w_x_dec_readout + w_x_ctx_readout
+
+    # shape: [batch, output_time_steps (hidden states), time_steps (input positions), decoder_output_size]
     w_x_readout = tf.transpose(w_x_readout, [0, 2, 1, 3])
 
     output_maxout = maxpool(candidate, output_size, params)
     output = output_maxout["output"]
 
-    # direct
+    # shape:
     w_readout_maxout = output_maxout["weight_ratio"]
 
     # propagate
     propagater = tf.matmul
 
+    # shape:
     w_x_maxout = propagater(w_x_readout, w_readout_maxout)
 
     weight_ratios = [w_x_maxout]

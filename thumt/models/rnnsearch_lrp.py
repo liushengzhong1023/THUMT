@@ -73,8 +73,9 @@ def _gru_encoder(cell, inputs, sequence_length, initial_state, params,
     output_ta = tf.TensorArray(dtype, time_steps, tensor_array_name="output_array")
 
     # Add a w_x_h_ta tensor array here.
-    w_x_h_ta = tf.TensorArray(dtype, time_steps,
-                              tensor_array_name="w_x_h_array")
+    w_x_h_ta = tf.TensorArray(dtype, time_steps, tensor_array_name="w_x_h_array")
+
+    # The initial value of w_x_h is all zero, shape: [batch, time_steps, output_size]
     w_x_h_init = tf.zeros([batch, time_steps, output_size], dtype=tf.float32)
 
     # Partition each word position to [batch, embedding_size]
@@ -86,9 +87,14 @@ def _gru_encoder(cell, inputs, sequence_length, initial_state, params,
         w_x_h_last: stores the previous one weight ratio vector.
         '''
         inp_t = input_ta.read(t)
-        cell_output, new_state, w_xlast_newh, w_x_newh = cell(inp_t, state,
-                                                              w_x_h_last,
-                                                              params)
+
+        # w_xlast_newh: the weight ratio from previous hidden state to current hidden state
+        # w_x_newh: the weight ratio from current input to current hidden state
+        cell_output, new_state, w_xlast_newh, w_x_newh = cell(inp_t, state, w_x_h_last, params)
+
+        # update the weight ratio from input to hidden state, shape [batch, time_steps, output_size]
+        # The add operation: replace the zeros in w_xlast_newh for current time step with w_x_newh
+        # w_x_h_new stores the weight ratios for all input words to current hidden state
         w_x_newh = tf.pad(w_x_newh, [[0, 0], [t, time_steps - t - 1], [0, 0]])
         w_x_h_new = w_xlast_newh + w_x_newh
         cell_output = _copy_through(t, sequence_length, zero_output, cell_output)
@@ -114,7 +120,8 @@ def _gru_encoder(cell, inputs, sequence_length, initial_state, params,
     all_output.set_shape([None, None, output_size])
     all_output = tf.transpose(all_output, [1, 0, 2])
 
-    # extract all stored weight ratio vectors, shape:
+    # extract all stored weight ratio vectors,
+    # shape: [time_steps (for hidden states), batch, time_steps (input positions), output_size]
     w_x_h_final_ta = outputs[3]
     w_x_h_final = w_x_h_final_ta.stack()
 
@@ -130,6 +137,7 @@ def _encoder(cell_fw, cell_bw, inputs, sequence_length, params, dtype=None,
                                         batch_axis=0, seq_axis=1)
 
         # the forward GRU and backward GRU are independent of each other, they are use initial_state=None
+        # Compute the weight ratio of input words to forward and backward hidden state.
         with tf.variable_scope("forward"):
             output_fw, state_fw, w_x_h_fw = _gru_encoder(cell_fw, inputs_fw,
                                                          sequence_length, None, params,
@@ -167,10 +175,12 @@ def _decoder(cell, inputs, memory, sequence_length, initial_state, w_x_enc,
     sequence_length: [batch], the length of each target sentence
     initial_stage: [batch, hidden size], the last hidden state of encoder.
     w_x_enc: the concatenation of forward and backward layer weight ratio.
+             shape: [time_steps (for hidden states), batch, time_steps (input positions), output_size * 2]
     w_x_bw: the backward layer weight ratio.
+            shape: [time_steps (for hidden states), batch, time_steps (input positions), output_size]
     Return:
-        1) w_x_h
-        2) w_x_c
+        1) w_x_h: the weight ratio from the input words to the decoder hidden state
+        2) w_x_c: the weight ratio from the input words to the context vectors
     '''
     # Assume that the underlying cell is GRUCell-like
     batch = tf.shape(inputs)[0]
@@ -202,13 +212,19 @@ def _decoder(cell, inputs, memory, sequence_length, initial_state, w_x_enc,
         input_ta = input_ta.unstack(inputs)
 
         # create tensor array for backward weight ratios
+        # w_x_bw_ta: [time_steps (for hidden states), batch, time_steps (input positions), output_size]
         len_src = tf.shape(w_x_bw)[0]
-        w_x_bw_ta = tf.TensorArray(tf.float32, len_src,
-                                   tensor_array_name="w_x_bw_array")
+        w_x_bw_ta = tf.TensorArray(tf.float32, len_src, tensor_array_name="w_x_bw_array")
         w_x_bw_ta = w_x_bw_ta.unstack(w_x_bw)
 
+        # shape: [time_steps (for hidden states), batch, time_steps (input positions), 2 * output_size]
+        # w_x_c_shape = [batch, time_steps (input positions), output_size]
         w_x_c_shape = tf.shape(w_x_enc)[1:]
+
+        # shape: [batch, time_steps (for hidden states), time_steps (input positions), 2 * output_size]
         w_x_enc = tf.transpose(w_x_enc, [1, 0, 2, 3])
+
+        # shape: [batch, time_steps (for hidden states), time_steps (input positions) * 2 * output_size]
         w_x_enc = tf.reshape(w_x_enc, tf.concat([tf.shape(w_x_enc)[:2], [-1]], -1))
 
         w_x_h_ta = tf.TensorArray(tf.float32, time_steps, tensor_array_name="w_x_h_array")
@@ -220,6 +236,8 @@ def _decoder(cell, inputs, memory, sequence_length, initial_state, w_x_enc,
                                               False, scope="s_transform",
                                               d2=True)
         initial_state = initial_state_linear["output"]
+
+        # shape: [batch, time_steps (input positions), decoder_output_size]
         w_initial = initial_state_linear["weight_ratios"][0]
         initial_state = tf.tanh(initial_state)
 
@@ -230,9 +248,9 @@ def _decoder(cell, inputs, memory, sequence_length, initial_state, w_x_enc,
             val_ta: weight summed context vector of each output word position
             state: decoder hidden state
             cache_key: cached keys for input word positions.
-            wxh_ta:
-            wxc_ta:
-            w_x_h_last: previous hidden state
+            wxh_ta: weight ratio from input words to output hidden states.
+            wxc_ta: weight ratio from input words to context vectors.
+            w_x_h_last: previous hidden state, [batch, time_steps (input positions), decoder_output_size]
             '''
             # now state
             wxh_ta = wxh_ta.write(t, w_x_h_last)
@@ -262,12 +280,16 @@ def _decoder(cell, inputs, memory, sequence_length, initial_state, w_x_enc,
             w_x_c = tf.reshape(w_x_enc, [1, len_src, len_src, -1]) * wr_att
             w_x_c = tf.reduce_sum(w_x_c, 2)
 
-            # w_x_c = tf.matmul(att, w_x_enc)
+            # w_x_c: [batch, time_steps (input positions), decoder_output_size]
             w_x_c = tf.reshape(w_x_c, w_x_c_shape)
+
+            # wxc_ta: [output_time_steps (hidden states), batch, time_steps (input positions), decoder_output_size]
             wxc_ta = wxc_ta.write(t, w_x_c)
 
             # next state, and only preserve elements within source sequence length
             # both w_x_h_last and w_x_c are used as cell input
+            # w_x_h shape: [batch, time_steps (input positions), decoder_output_size]
+            # w_x_c shape: [batch, time_steps (input positions), decoder_output_size]
             cell_input = [inp_t, context]
             cell_output, new_state, w_x_h_new = cell(cell_input, state, w_x_h_last, w_x_c, params)
             cell_output = _copy_through(t, sequence_length["target"], zero_output, cell_output)
@@ -304,6 +326,7 @@ def _decoder(cell, inputs, memory, sequence_length, initial_state, w_x_enc,
         final_value = tf.transpose(final_value, [1, 0, 2])
 
         # get wxh_ta and wxc_ta
+        # shape: [output_time_steps (hidden states), batch, time_steps (input positions), decoder_output_size]
         w_x_h_final_ta = outputs[6]
         w_x_h_final = w_x_h_final_ta.stack()
         w_x_c_final_ta = outputs[7]
@@ -377,10 +400,12 @@ def model_graph(features, labels, params):
 
     w_x_h_fw, w_x_h_bw = encoder_output["weight_ratios"]
 
-    # [::-1] reverse the backward weight ratio list, shape:
+    # [::-1] reverse the backward weight ratio list
+    # shape: [time_steps (for hidden states), batch, time_steps (input positions), output_size]
     w_x_h_bw = w_x_h_bw[::-1, :, ::-1]
 
     # concatenate the forward and backward weight ratios
+    # shape: [time_steps (for hidden states), batch, time_steps (input positions), output_size * 2]
     w_x_enc = tf.concat([w_x_h_fw, w_x_h_bw], -1)
 
     # define the decoder RNN cell, also from the LRP file
@@ -408,9 +433,14 @@ def model_graph(features, labels, params):
     initial_state = encoder_output["final_states"]["backward"]
 
     # apply the decoder, feed encoder weight ratio and backward layer weight ratio
+    # w_x_enc: [time_steps (for hidden states), batch, time_steps (input positions), output_size * 2]
+    # w_x_h_bw: [time_steps (for hidden states), batch, time_steps (input positions), output_size]
     decoder_output = _decoder(cell, tgt_inputs, encoder_output["annotation"],
                               length, initial_state, w_x_enc, w_x_h_bw, params)
 
+    # weight ratio of input words to decoder hidden states, context vectors, and intial states
+    # w_x_dec, w_x_ctx shape: [output_time_steps (hidden states), batch, time_steps (input positions), decoder_output_size]
+    # w_x_init shape: [batch, time_steps (input positions), decoder_output_size]
     w_x_dec, w_x_ctx, w_x_init = decoder_output["weight_ratios"]
 
     # Shift left for the target, add one column before the second dimension with value 0
@@ -461,8 +491,7 @@ def model_graph(features, labels, params):
 
     # LRP on maxout layer, return a dictionary: 'output' and 'weight_ratios'
     # use w_x_dec and w_x_ctx together
-    maxhid_maxout = lrp.maxout_v2n(maxout_features, maxout_size, params.maxnum, [w_x_dec, w_x_ctx], params,
-                                   concat=False)
+    maxhid_maxout = lrp.maxout_v2n(maxout_features, maxout_size, params.maxnum, [w_x_dec, w_x_ctx], params, concat=False)
     maxhid = maxhid_maxout["output"]
     w_x_maxout = maxhid_maxout["weight_ratios"][0]
     w_x_maxout = tf.transpose(w_x_maxout, [0, 2, 1, 3])
@@ -477,15 +506,21 @@ def model_graph(features, labels, params):
         readout = tf.nn.dropout(readout, 1.0 - params.dropout)
 
     # Prediction and final relevance
+    # w_x_true shape: [batch, input_time_steps, output_time_steps, decoder_output_size]
     logits = lrp.linear_v2n(readout, tgt_vocab_size, True, [w_x_readout], params, False, scope="softmax")
     w_x_true = logits["weight_ratios"][0]
     logits = logits["output"]
 
     # reshape logits
     logits = tf.reshape(logits, [-1, tgt_vocab_size])
+
+    # shape:
     w_x_true = tf.transpose(w_x_true, [0, 2, 1, 3])
-    w_x_true = tf.reshape(w_x_true, [-1, tf.shape(w_x_true)[-2],
-                                     tf.shape(w_x_true)[-1]])
+
+    # shape:
+    w_x_true = tf.reshape(w_x_true, [-1, tf.shape(w_x_true)[-2], tf.shape(w_x_true)[-1]])
+
+    # shape:
     w_x_true = tf.transpose(w_x_true, [0, 2, 1])
 
     # compute labels for LRP, add one column of index before the weight ratios
@@ -499,7 +534,7 @@ def model_graph(features, labels, params):
     labels_lrp = tf.transpose(labels_lrp, [1, 0])
 
     # extract the weight ratios according to the given positions
-    # w_x_true shape: [batch, , last_dimension_of_weight_ratios]
+    # w_x_true shape: [batch, input_time_steps, output_time_steps]
     w_x_true = tf.gather_nd(w_x_true, labels_lrp)
     w_x_true = tf.reshape(w_x_true, [bs, -1, tf.shape(w_x_true)[-1]])
 
@@ -520,7 +555,7 @@ def model_graph(features, labels, params):
         )
     )
 
-    # store relevance information, only one key: 'result'
+    # store relevance information, only one key: 'result'; relevance = w_x_true?
     rlv_info = {}
     rlv_info["result"] = w_x_true
 
