@@ -73,18 +73,18 @@ def layer_process(x, mode):
 def residual_fn(x, y, w_x_last, w_x_inp, params, keep_prob=None):
     if keep_prob and keep_prob < 1.0:
         y = tf.nn.dropout(y, keep_prob)
-    batchsize=tf.shape(x)[0]
-    len_inp=tf.shape(x)[1]
+    batchsize = tf.shape(x)[0]
+    len_inp = tf.shape(x)[1]
     len_src = tf.shape(w_x_last)[1]
     dim = tf.shape(x)[2]
     result = {}
-    result["output"] = x+y
+    result["output"] = x + y
     x_down = tf.reshape(x, [batchsize, -1])
     y_down = tf.reshape(y, [batchsize, -1])
     z_down = tf.reshape(result["output"], [batchsize, -1])
 
-    w_last_out, w_inp_out = wr.weight_ratio_weighted_sum([x_down,y_down],
-                                                         [1.,1.],
+    w_last_out, w_inp_out = wr.weight_ratio_weighted_sum([x_down, y_down],
+                                                         [1., 1.],
                                                          z_down,
                                                          stab=params.stab,
                                                          flatten=True)
@@ -212,7 +212,7 @@ def transformer_decoder(inputs, memory, bias, mem_bias, w_x_enc, params,
                     y = y_self["outputs"]
                     w_x_self = y_self["weight_ratio"]
 
-                    x_res = residual_fn(x, y,w_x_last,w_x_self,params,
+                    x_res = residual_fn(x, y, w_x_last, w_x_self, params,
                                         1.0 - params.residual_dropout)
                     x = x_res["output"]
                     w_x_selfres = x_res["weight_ratio"]
@@ -266,7 +266,7 @@ def transformer_decoder(inputs, memory, bias, mem_bias, w_x_enc, params,
                     w_x_ffnres = x_res["weight_ratio"]
 
                     x_norm = lrp.layer_process(x, params.layer_postprocess,
-                                               w_x_ffnres,params)
+                                               w_x_ffnres, params)
                     x = x_norm["outputs"]
                     w_x_ffnres = x_norm["weight_ratios"]
 
@@ -274,7 +274,7 @@ def transformer_decoder(inputs, memory, bias, mem_bias, w_x_enc, params,
 
         outputs = layer_process(x, params.layer_preprocess)
 
-        return  {"outputs": outputs, "weight_ratios": w_x_last}
+        return {"outputs": outputs, "weight_ratios": w_x_last}
 
 
 def model_graph(features, labels, mode, params):
@@ -393,8 +393,9 @@ class TransformerLRP(NMTModel):
 
             with tf.variable_scope(self._scope, reuse=tf.AUTO_REUSE):
                 loss, rlv = model_graph(features, features["target"],
-                                   "train", params)
-                return features["source"] , features["target"], rlv, loss
+                                        "train", params)
+                return features["source"], features["target"], rlv, loss
+
         return relevance_fn
 
     def get_evaluation_func(self):

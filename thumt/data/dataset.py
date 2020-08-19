@@ -81,6 +81,60 @@ def batch_examples(example, batch_size, max_length, mantissa_bits,
     return outputs
 
 
+def sort_input_file(filename, reverse=True):
+    '''
+    Sorted_keys: from original index --> sorted index
+    sorted_inputs: sorted sentences, according to their length order.
+    '''
+    # Read file
+    with tf.gfile.Open(filename) as fd:
+        inputs = [line.strip() for line in fd]
+
+    # Get length for each input sample.
+    input_lens = [
+        (i, len(line.strip().split())) for i, line in enumerate(inputs)
+    ]
+
+    # Sort the sentence according to their lengths
+    sorted_input_lens = sorted(input_lens, key=operator.itemgetter(1),
+                               reverse=reverse)
+    sorted_keys = {}
+    sorted_inputs = []
+
+    for i, (index, _) in enumerate(sorted_input_lens):
+        sorted_inputs.append(inputs[index])
+        sorted_keys[index] = i
+
+    return sorted_keys, sorted_inputs
+
+
+def sort_and_zip_files(names):
+    inputs = []
+    input_lens = []
+    files = [tf.gfile.GFile(name) for name in names]
+
+    count = 0
+
+    for lines in zip(*files):
+        lines = [line.strip() for line in lines]
+        input_lens.append((count, len(lines[0].split())))
+        inputs.append(lines)
+        count += 1
+
+    # Close files
+    for fd in files:
+        fd.close()
+
+    sorted_input_lens = sorted(input_lens, key=operator.itemgetter(1),
+                               reverse=True)
+    sorted_inputs = []
+
+    for i, (index, _) in enumerate(sorted_input_lens):
+        sorted_inputs.append(inputs[index])
+
+    return [list(x) for x in zip(*sorted_inputs)]
+
+
 def get_training_input(filenames, params):
     """ Get input for training stage, both source sentence and target sentence are processed together.
 
@@ -168,60 +222,6 @@ def get_training_input(filenames, params):
         features["target_length"] = tf.squeeze(features["target_length"], 1)
 
         return features
-
-
-def sort_input_file(filename, reverse=True):
-    '''
-    Sorted_keys: from original index --> sorted index
-    sorted_inputs: sorted sentences, according to their length order.
-    '''
-    # Read file
-    with tf.gfile.Open(filename) as fd:
-        inputs = [line.strip() for line in fd]
-
-    # Get length for each input sample.
-    input_lens = [
-        (i, len(line.strip().split())) for i, line in enumerate(inputs)
-    ]
-
-    # Sort the sentence according to their lengths
-    sorted_input_lens = sorted(input_lens, key=operator.itemgetter(1),
-                               reverse=reverse)
-    sorted_keys = {}
-    sorted_inputs = []
-
-    for i, (index, _) in enumerate(sorted_input_lens):
-        sorted_inputs.append(inputs[index])
-        sorted_keys[index] = i
-
-    return sorted_keys, sorted_inputs
-
-
-def sort_and_zip_files(names):
-    inputs = []
-    input_lens = []
-    files = [tf.gfile.GFile(name) for name in names]
-
-    count = 0
-
-    for lines in zip(*files):
-        lines = [line.strip() for line in lines]
-        input_lens.append((count, len(lines[0].split())))
-        inputs.append(lines)
-        count += 1
-
-    # Close files
-    for fd in files:
-        fd.close()
-
-    sorted_input_lens = sorted(input_lens, key=operator.itemgetter(1),
-                               reverse=True)
-    sorted_inputs = []
-
-    for i, (index, _) in enumerate(sorted_input_lens):
-        sorted_inputs.append(inputs[index])
-
-    return [list(x) for x in zip(*sorted_inputs)]
 
 
 def get_evaluation_input(inputs, params):

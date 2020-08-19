@@ -303,6 +303,7 @@ def main(args):
                 # run one batch, get source, target, relevance, and loss
                 src_seq, trg_seq, rlv_info, loss = sess.run(relevances)
                 message = "Finished batch"" %d" % count
+                print(np.shape(rlv_info["result"]))
 
                 # store the relevance information for each single (source, target) pair, write to the relevance file
                 for i in range(src_seq.shape[0]):
@@ -315,6 +316,7 @@ def main(args):
                     output.write("src: " + src + "\n")
                     output.write("trg: " + trg + "\n")
                     output.write("result: %s\n" % str(rlv_info["result"][i]))
+                    print(np.sum(rlv_info["result"][i][:, 0]))
                 tf.logging.log(tf.logging.INFO, message)
 
 

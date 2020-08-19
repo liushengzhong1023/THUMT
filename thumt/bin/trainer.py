@@ -510,7 +510,7 @@ def main(args):
                     step=params.update_cycle)
             )
 
-            # Add the EvaluationHood to perform evaluation per params.eval_secs or params.eval_steps
+            # Add the EvaluationHook to perform evaluation per params.eval_secs or params.eval_steps
             if eval_input_fn is not None:
                 train_hooks.append(
                     hooks.MultiStepHook(

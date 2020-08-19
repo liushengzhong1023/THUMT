@@ -244,7 +244,7 @@ def main(args):
     with tf.Graph().as_default():
         model_var_lists = []
 
-        # Load checkpoints, can load multiple checkpoints
+        # Load checkpoints, can load multiple checkpoints of the same model
         for i, checkpoint in enumerate(args.checkpoints):
             tf.logging.info("Loading %s" % checkpoint)
             var_list = tf.train.list_variables(checkpoint)
